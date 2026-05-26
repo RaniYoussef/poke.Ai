@@ -1,0 +1,32 @@
+from fastapi import FastAPI
+
+from app.api.routes import test
+from app.db.mongodb import ping_mongo
+
+app = FastAPI(
+    title="Poke.AI Backend",
+    description="Backend API for the proactive Telegram AI friend",
+    version="0.1.0",
+)
+
+app.include_router(test.router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    await ping_mongo()
+    print("Connected to MongoDB")
+
+
+@app.get("/")
+def root():
+    return {"message": "Poke.AI backend is running"}
+
+
+@app.get("/health")
+async def health_check():
+    await ping_mongo()
+    return {
+        "status": "ok",
+        "database": "mongodb connected",
+    }
