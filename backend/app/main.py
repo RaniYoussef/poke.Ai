@@ -1,7 +1,16 @@
 from fastapi import FastAPI
 
-from app.api.routes import test, users, messages, memories, events, proactive_tasks
+from app.api.routes import (
+    test,
+    users,
+    messages,
+    memories,
+    events,
+    proactive_tasks,
+    agent,
+)
 from app.db.mongodb import ping_mongo
+
 
 app = FastAPI(
     title="Poke.AI Backend",
@@ -9,12 +18,16 @@ app = FastAPI(
     version="0.1.0",
 )
 
+
+# Routes
 app.include_router(test.router)
 app.include_router(users.router)
 app.include_router(messages.router)
 app.include_router(memories.router)
 app.include_router(events.router)
 app.include_router(proactive_tasks.router)
+app.include_router(agent.router)
+
 
 @app.on_event("startup")
 async def startup_event():
