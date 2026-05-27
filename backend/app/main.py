@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import test
+from app.api.routes import test, users, messages
 from app.db.mongodb import ping_mongo
 
 app = FastAPI(
@@ -10,7 +10,8 @@ app = FastAPI(
 )
 
 app.include_router(test.router)
-
+app.include_router(users.router)
+app.include_router(messages.router)
 
 @app.on_event("startup")
 async def startup_event():
