@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.db.mongodb import db
+from db.mongodb import db
 
 router = APIRouter(prefix="/events", tags=["events"])
 

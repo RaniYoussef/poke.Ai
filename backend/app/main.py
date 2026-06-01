@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 
-from app.api.routes import (
+from backend.app.api.routes import (
     test,
     users,
     messages,
@@ -9,7 +9,7 @@ from app.api.routes import (
     proactive_tasks,
     agent,
 )
-from app.db.mongodb import ping_mongo
+from db.mongodb import ping_mongo
 
 
 app = FastAPI(

@@ -5,7 +5,7 @@ from bson import ObjectId
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.db.mongodb import db
+from db.mongodb import db
 
 router = APIRouter(prefix="/proactive-tasks", tags=["proactive tasks"])
 

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter
 
-from app.db.mongodb import db
+from db.mongodb import db
 
 router = APIRouter(prefix="/test", tags=["test"])
 
