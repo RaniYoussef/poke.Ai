@@ -1,22 +1,16 @@
-import vertexai
-from vertexai.generative_models import GenerativeModel
+from google import genai
 
 from backend.app.config import settings
 
-vertexai.init(project=settings.GOOGLE_CLOUD_PROJECT, location="us-central1")
+_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+
+_MODEL = "gemini-2.5-flash"
 
 _SYSTEM_PROMPT = (
     "You are Poke.AI, a warm, caring, and proactive AI friend. "
     "You remember things about the user and genuinely care about their wellbeing. "
     "Keep responses concise, friendly, and conversational. Never be robotic or formal."
 )
-
-_chat_model = GenerativeModel(
-    model_name="gemini-2.0-flash-001",
-    system_instruction=_SYSTEM_PROMPT,
-)
-
-_summary_model = GenerativeModel(model_name="gemini-2.0-flash-001")
 
 
 async def generate_reply(memory_summary: str, recent_messages: list[dict], user_message: str) -> str:
@@ -33,7 +27,11 @@ async def generate_reply(memory_summary: str, recent_messages: list[dict], user_
 
     parts.append(f"\nUser: {user_message}")
 
-    response = await _chat_model.generate_content_async("\n".join(parts))
+    response = await _client.aio.models.generate_content(
+        model=_MODEL,
+        contents="\n".join(parts),
+        config={"system_instruction": _SYSTEM_PROMPT},
+    )
     return response.text.strip()
 
 
@@ -45,5 +43,8 @@ async def update_memory_summary(old_summary: str, user_message: str, ai_response
         f"New exchange:\nUser: {user_message}\nAssistant: {ai_response}\n\n"
         "Updated summary:"
     )
-    response = await _summary_model.generate_content_async(prompt)
+    response = await _client.aio.models.generate_content(
+        model=_MODEL,
+        contents=prompt,
+    )
     return response.text.strip()
