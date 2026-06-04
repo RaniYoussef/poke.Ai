@@ -12,11 +12,11 @@ _SYSTEM_PROMPT = (
 )
 
 _chat_model = GenerativeModel(
-    model_name="gemini-2.0-flash",
+    model_name="gemini-2.0-flash-001",
     system_instruction=_SYSTEM_PROMPT,
 )
 
-_summary_model = GenerativeModel(model_name="gemini-2.0-flash")
+_summary_model = GenerativeModel(model_name="gemini-2.0-flash-001")
 
 
 async def generate_reply(memory_summary: str, recent_messages: list[dict], user_message: str) -> str:
