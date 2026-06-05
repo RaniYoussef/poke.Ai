@@ -32,6 +32,11 @@ async def lifespan(_app: FastAPI):
         logger.info("Starting proactive worker inside FastAPI (dev mode)")
         asyncio.create_task(proactive_worker_loop())
 
+    if settings.RUN_PROACTIVE_DECISION_WORKER_IN_API:
+        from backend.app.workers.proactive_decision_worker import proactive_decision_worker_loop
+        logger.info("Starting proactive decision worker inside FastAPI (dev mode)")
+        asyncio.create_task(proactive_decision_worker_loop())
+
     yield
     # ── shutdown (nothing to clean up for now) ────────────────────────────────
 
@@ -75,10 +80,28 @@ async def _ensure_indexes():
             ("follow_up_done", ASCENDING),
             ("start_time", ASCENDING),
         ])
+        await db.events.create_index([
+            ("user_id", ASCENDING),
+            ("follow_up_done", ASCENDING),
+            ("followup_at", ASCENDING),
+        ])
 
         # proactive_tasks: worker query (status + scheduled_time is the hot path)
         await db.proactive_tasks.create_index([("status", ASCENDING), ("scheduled_time", ASCENDING)])
         await db.proactive_tasks.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
+        await db.proactive_tasks.create_index([
+            ("user_id", ASCENDING),
+            ("cooldown_key", ASCENDING),
+            ("status", ASCENDING),
+            ("created_at", DESCENDING),
+        ])
+
+        # users: decision worker scan + proactive cooldown metadata
+        await db.users.create_index([("telegram_id", ASCENDING)])
+        await db.users.create_index([
+            ("proactive_enabled", ASCENDING),
+            ("last_proactive_decision_at", ASCENDING),
+        ])
 
         # memory_profiles: one profile per user
         await db.memory_profiles.create_index([("user_id", ASCENDING)], unique=True)

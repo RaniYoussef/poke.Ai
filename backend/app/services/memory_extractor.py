@@ -170,14 +170,17 @@ async def _save_events(user_id, telegram_id, events: list, now: datetime) -> Non
         title = (ev.get("title") or "").strip()
         if not title:
             continue
+        start_time = _parse_dt(ev.get("event_start")) or now
+        end_time = _parse_dt(ev.get("event_end"))
         await db.events.insert_one({
             "user_id": user_id,
             "telegram_id": telegram_id,
             "title": title,
             "description": ev.get("description", ""),
             "event_type": ev.get("event_type", "other"),
-            "start_time": _parse_dt(ev.get("event_start")) or now,
-            "end_time": _parse_dt(ev.get("event_end")),
+            "start_time": start_time,
+            "end_time": end_time,
+            "followup_at": end_time or start_time,
             "follow_up_needed": True,
             "follow_up_done": False,
             "created_at": now,

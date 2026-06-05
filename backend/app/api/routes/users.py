@@ -39,7 +39,11 @@ async def upsert_telegram_user(user_data: TelegramUserCreate):
         {"telegram_id": user_data.telegram_id},
         {
             "$set": user_doc,
-            "$setOnInsert": {"created_at": now},
+            "$setOnInsert": {
+                "created_at": now,
+                "proactive_enabled": True,
+                "proactivity_level": "medium",
+            },
         },
         upsert=True,
     )

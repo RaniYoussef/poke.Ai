@@ -16,6 +16,7 @@ class EventCreate(BaseModel):
     event_type: str
     start_time: datetime
     end_time: Optional[datetime] = None
+    followup_at: Optional[datetime] = None
     follow_up_needed: bool = True
 
 
@@ -36,6 +37,7 @@ async def create_event(event_data: EventCreate):
         "event_type": event_data.event_type,
         "start_time": event_data.start_time,
         "end_time": event_data.end_time,
+        "followup_at": event_data.followup_at,
         "follow_up_needed": event_data.follow_up_needed,
         "follow_up_done": False,
         "created_at": now,
@@ -69,6 +71,7 @@ async def get_user_events(telegram_id: int, limit: int = 20):
             "event_type": event["event_type"],
             "start_time": event["start_time"],
             "end_time": event.get("end_time"),
+            "followup_at": event.get("followup_at"),
             "follow_up_needed": event["follow_up_needed"],
             "follow_up_done": event["follow_up_done"],
         })

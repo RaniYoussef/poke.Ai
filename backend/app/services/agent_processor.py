@@ -27,6 +27,17 @@ async def process_user_message(
     user_id = user["_id"]
     now = datetime.now(timezone.utc)
 
+    await db.users.update_one(
+        {"_id": user_id},
+        {
+            "$set": {
+                "last_seen_at": now,
+                "last_user_message_at": now,
+                "updated_at": now,
+            }
+        },
+    )
+
     # 1. Save incoming user message
     await db.messages.insert_one({
         "user_id": user_id,
@@ -45,10 +56,12 @@ async def process_user_message(
     prompt = format_context_for_prompt(context)
 
     # 4. Generate AI reply
+    reply_failed = False
     try:
         reply = await generate_reply(prompt)
     except Exception as e:
         logger.error("Gemini reply failed for telegram_id %s: %s", telegram_id, e)
+        reply_failed = True
         reply = "Hey, I'm having a tiny glitch right now — give me a moment and try again!"
 
     # 5. Save assistant reply
@@ -63,8 +76,9 @@ async def process_user_message(
     })
 
     # 6. Background tasks — don't block the response
-    summary = context.get("summary", "")
-    asyncio.create_task(_run_post_processing(user_id, telegram_id, content, reply, summary))
+    if not reply_failed:
+        summary = context.get("summary", "")
+        asyncio.create_task(_run_post_processing(user_id, telegram_id, content, reply, summary))
 
     return {"success": True, "response": reply}
 

@@ -24,7 +24,11 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "updated_at": now,
                 "last_seen_at": now,
             },
-            "$setOnInsert": {"created_at": now},
+            "$setOnInsert": {
+                "created_at": now,
+                "proactive_enabled": True,
+                "proactivity_level": "medium",
+            },
         },
         upsert=True,
     )

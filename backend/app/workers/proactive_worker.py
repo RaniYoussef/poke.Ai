@@ -14,26 +14,23 @@ Flow per tick:
 """
 import asyncio
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timezone
 
 from bson import ObjectId
 
 from db.mongodb import db
 from backend.app.services.context_builder import build_user_context, format_context_for_prompt
 from backend.app.services.gemini_client import generate_reply
+from backend.app.services.proactive_decision_engine import (
+    get_proactive_cooldown_state,
+    get_quiet_hours_state,
+)
 from backend.app.services.telegram_sender import send_telegram_message
 
 logger = logging.getLogger(__name__)
 
 # How often the worker wakes up (seconds)
 WORKER_INTERVAL_SECONDS = 30
-
-# Cooldown thresholds by proactivity_level
-_COOLDOWN_HOURS = {
-    "low": 48,
-    "medium": 24,
-    "high": 8,
-}
 
 _PROACTIVE_PROMPT_TEMPLATE = """\
 You are poke.Ai texting {name} first — they didn't message you.
@@ -75,10 +72,13 @@ async def _process_one_task() -> None:
     task = await db.proactive_tasks.find_one_and_update(
         {
             "status": "pending",
-            "scheduled_time": {"$lte": now},
+            "$or": [
+                {"scheduled_time": {"$lte": now}},
+                {"scheduled_at": {"$lte": now}},
+            ],
         },
         {"$set": {"status": "sending"}},
-        sort=[("priority", -1), ("scheduled_time", 1)],
+        sort=[("priority", -1), ("scheduled_time", 1), ("scheduled_at", 1)],
         return_document=True,  # return updated doc
     )
 
@@ -97,32 +97,43 @@ async def _process_one_task() -> None:
             await _fail_task(task_id, "User not found or missing telegram_id")
             return
 
+        telegram_id = telegram_id or user.get("telegram_id")
+
+        quiet_state = get_quiet_hours_state(user)
+        if quiet_state["blocked"]:
+            reschedule_at = quiet_state["resume_at"]
+            logger.info(
+                "Task %s blocked by quiet hours for user %s - rescheduling to %s",
+                task_id, telegram_id, reschedule_at,
+            )
+            await _reschedule_task(task_id, reschedule_at)
+            return
+
         # Cooldown check
-        cooldown_result = await _check_cooldown(user_id, user)
+        cooldown_result = await get_proactive_cooldown_state(user_id, user)
         if cooldown_result["blocked"]:
-            reschedule_at = cooldown_result["reschedule_at"]
+            reschedule_at = cooldown_result["resume_at"]
             logger.info(
                 "Task %s blocked by cooldown for user %s — rescheduling to %s",
                 task_id, telegram_id, reschedule_at,
             )
-            await db.proactive_tasks.update_one(
-                {"_id": task_id},
-                {"$set": {"status": "pending", "scheduled_time": reschedule_at}},
-            )
+            await _reschedule_task(task_id, reschedule_at)
             return
 
-        # Build context for proactive mode
-        context = await build_user_context(user_id, incoming_message=None, mode="proactive")
-        context_str = format_context_for_prompt(context)
-        name = user.get("first_name") or user.get("username") or "there"
+        message_text = _validated_message_override(task)
+        if not message_text:
+            # Build context for proactive mode
+            context = await build_user_context(user_id, incoming_message=None, mode="proactive")
+            context_str = format_context_for_prompt(context)
+            name = user.get("first_name") or user.get("username") or "there"
 
-        # Generate the outbound message
-        prompt = _PROACTIVE_PROMPT_TEMPLATE.format(
-            name=name,
-            reason=reason,
-            context=context_str,
-        )
-        message_text = await generate_reply(prompt)
+            # Generate the outbound message
+            prompt = _PROACTIVE_PROMPT_TEMPLATE.format(
+                name=name,
+                reason=reason,
+                context=context_str,
+            )
+            message_text = await generate_reply(prompt)
 
         # Send via Telegram
         sent = await send_telegram_message(telegram_id, message_text)
@@ -139,13 +150,33 @@ async def _process_one_task() -> None:
             "role": "assistant",
             "content": message_text,
             "message_type": "proactive",
+            "proactive_task_id": task_id,
+            "proactive_type": task.get("task_type") or task.get("type"),
             "created_at": sent_at,
         })
+
+        await db.users.update_one(
+            {"_id": user_id},
+            {
+                "$set": {
+                    "last_proactive_message_at": sent_at,
+                    "updated_at": sent_at,
+                }
+            },
+        )
+
+        await _mark_related_event_followed_up(task, sent_at)
 
         # Mark task done
         await db.proactive_tasks.update_one(
             {"_id": task_id},
-            {"$set": {"status": "sent", "sent_at": sent_at}},
+            {
+                "$set": {
+                    "status": "sent",
+                    "sent_at": sent_at,
+                    "message_sent": message_text,
+                }
+            },
         )
         logger.info("Proactive task %s sent to user %s", task_id, telegram_id)
 
@@ -154,31 +185,53 @@ async def _process_one_task() -> None:
         await _fail_task(task_id, str(e))
 
 
-async def _check_cooldown(user_id: ObjectId, user: dict) -> dict:
-    """
-    Returns {"blocked": True/False, "reschedule_at": datetime | None}.
-    Checks how recently the user received a proactive message and enforces limits.
-    """
-    level = user.get("proactivity_level", "medium")
-    cooldown_hours = _COOLDOWN_HOURS.get(level, 24)
-    cutoff = datetime.now(timezone.utc) - timedelta(hours=cooldown_hours)
+def _validated_message_override(task: dict) -> str | None:
+    message = (task.get("message_override") or "").strip()
+    if not message:
+        return None
 
-    last_proactive = await db.messages.find_one(
+    message = " ".join(message.split())
+    if len(message.split()) > 45:
+        logger.warning("Task %s message_override is too long; regenerating", task.get("_id"))
+        return None
+
+    return message[:500]
+
+
+async def _reschedule_task(task_id: ObjectId, reschedule_at: datetime | None) -> None:
+    reschedule_at = reschedule_at or datetime.now(timezone.utc)
+    await db.proactive_tasks.update_one(
+        {"_id": task_id},
         {
-            "user_id": user_id,
-            "role": "assistant",
-            "message_type": "proactive",
-            "created_at": {"$gte": cutoff},
+            "$set": {
+                "status": "pending",
+                "scheduled_time": reschedule_at,
+                "scheduled_at": reschedule_at,
+            }
         },
-        sort=[("created_at", -1)],
     )
 
-    if last_proactive:
-        last_sent = last_proactive["created_at"]
-        reschedule_at = last_sent + timedelta(hours=cooldown_hours)
-        return {"blocked": True, "reschedule_at": reschedule_at}
 
-    return {"blocked": False, "reschedule_at": None}
+async def _mark_related_event_followed_up(task: dict, sent_at: datetime) -> None:
+    task_type = task.get("task_type") or task.get("type")
+    if task_type != "event_followup" or not task.get("event_id"):
+        return
+
+    try:
+        event_id = ObjectId(str(task["event_id"]))
+    except Exception:
+        logger.warning("Task %s has invalid event_id %s", task.get("_id"), task.get("event_id"))
+        return
+
+    await db.events.update_one(
+        {"_id": event_id},
+        {
+            "$set": {
+                "follow_up_done": True,
+                "followed_up_at": sent_at,
+            }
+        },
+    )
 
 
 async def _fail_task(task_id: ObjectId, error: str) -> None:

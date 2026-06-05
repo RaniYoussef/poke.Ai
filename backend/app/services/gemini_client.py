@@ -7,7 +7,7 @@ from backend.app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_client = genai.Client(api_key=settings.GEMINI_API_KEY)
+_client = None
 _MODEL = "gemini-2.5-flash"
 
 # System instruction injected into every reply
@@ -51,13 +51,22 @@ Would a real friend text this? Is it too long? Does it sound like an AI?
 If yes — cut it down, make it human."""
 
 
+def _get_client():
+    global _client
+    if not settings.GEMINI_API_KEY:
+        raise ValueError("GEMINI_API_KEY is not configured")
+    if _client is None:
+        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+    return _client
+
+
 async def generate_reply(prompt: str) -> str:
     """
     Generate a conversational reply from a fully pre-formatted prompt string.
     The caller is responsible for building the prompt (context + user message).
     """
     try:
-        response = await _client.aio.models.generate_content(
+        response = await _get_client().aio.models.generate_content(
             model=_MODEL,
             contents=prompt,
             config={"system_instruction": PERSONALITY},
@@ -74,7 +83,7 @@ async def generate_json(prompt: str) -> dict:
     Strips markdown fences if present. Returns {} on any parse error.
     """
     try:
-        response = await _client.aio.models.generate_content(
+        response = await _get_client().aio.models.generate_content(
             model=_MODEL,
             contents=prompt,
         )
@@ -109,7 +118,7 @@ async def update_memory_summary(old_summary: str, user_message: str, ai_response
         "Updated summary:"
     )
     try:
-        response = await _client.aio.models.generate_content(
+        response = await _get_client().aio.models.generate_content(
             model=_MODEL,
             contents=prompt,
         )

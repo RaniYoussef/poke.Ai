@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
 
 from dotenv import load_dotenv
 from motor.motor_asyncio import AsyncIOMotorClient
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+load_dotenv(_PROJECT_ROOT / ".env")
+load_dotenv(_PROJECT_ROOT / "backend" / ".env", override=True)
 load_dotenv()
 
 MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
