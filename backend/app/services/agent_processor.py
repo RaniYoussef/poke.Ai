@@ -1,158 +1,103 @@
-from datetime import datetime, timedelta, timezone
-import re
+"""
+agent_processor.py
+Handles the full reactive message flow:
+  user message → context → Gemini reply → save → background extraction
+"""
+import asyncio
+import logging
+from datetime import datetime, timezone
 
-from app.db.mongodb import db
+from db.mongodb import db
+from backend.app.services.context_builder import build_user_context, format_context_for_prompt
+from backend.app.services.gemini_client import generate_reply, update_memory_summary
+from backend.app.services.memory_extractor import extract_and_save
+
+logger = logging.getLogger(__name__)
 
 
 async def process_user_message(
     telegram_id: int,
     content: str,
     telegram_message_id: int | None = None,
-):
-    """
-    MVP agent processor.
-
-    Current behavior:
-    1. Saves the user message.
-    2. Detects simple exam messages.
-    3. Creates a memory.
-    4. Creates an event.
-    5. Creates a proactive follow-up task.
-
-    Later we replace the rule-based extraction with an LLM.
-    """
-
+) -> dict:
     user = await db.users.find_one({"telegram_id": telegram_id})
-
     if not user:
-        return {
-            "success": False,
-            "error": "User not found. Create the Telegram user first.",
-        }
+        return {"success": False, "error": "User not found. Send /start first."}
 
+    user_id = user["_id"]
     now = datetime.now(timezone.utc)
 
-    # 1. Save message
-    message_doc = {
-        "user_id": user["_id"],
+    # 1. Save incoming user message
+    await db.messages.insert_one({
+        "user_id": user_id,
         "telegram_id": telegram_id,
         "telegram_message_id": telegram_message_id,
         "role": "user",
         "content": content,
         "message_type": "text",
         "created_at": now,
-    }
+    })
 
-    message_result = await db.messages.insert_one(message_doc)
-    message_id = str(message_result.inserted_id)
+    # 2. Build context (user profile, memories, recent messages, events, tasks)
+    context = await build_user_context(user_id, incoming_message=content, mode="reactive")
 
-    created_items = {
-        "message_id": message_id,
-        "memory_id": None,
-        "event_id": None,
-        "proactive_task_id": None,
-    }
+    # 3. Format context into a Gemini-ready prompt
+    prompt = format_context_for_prompt(context)
 
-    lower_content = content.lower()
+    # 4. Generate AI reply
+    try:
+        reply = await generate_reply(prompt)
+    except Exception as e:
+        logger.error("Gemini reply failed for telegram_id %s: %s", telegram_id, e)
+        reply = "Hey, I'm having a tiny glitch right now — give me a moment and try again!"
 
-    # 2. Simple rule: detect exam
-    if "exam" in lower_content:
-        memory_doc = {
-            "user_id": user["_id"],
+    # 5. Save assistant reply
+    await db.messages.insert_one({
+        "user_id": user_id,
+        "telegram_id": telegram_id,
+        "telegram_message_id": None,
+        "role": "assistant",
+        "content": reply,
+        "message_type": "text",
+        "created_at": datetime.now(timezone.utc),
+    })
+
+    # 6. Background tasks — don't block the response
+    summary = context.get("summary", "")
+    asyncio.create_task(_run_post_processing(user_id, telegram_id, content, reply, summary))
+
+    return {"success": True, "response": reply}
+
+
+async def _run_post_processing(
+    user_id,
+    telegram_id: int,
+    user_message: str,
+    ai_response: str,
+    summary: str,
+) -> None:
+    """
+    Runs after the reply is sent:
+    - Updates the rolling conversation summary
+    - Extracts structured memories, events, and proactive tasks
+    """
+    try:
+        # Update rolling summary (needed for next message's context)
+        new_summary = await update_memory_summary(summary, user_message, ai_response)
+        now = datetime.now(timezone.utc)
+        await db.memories.insert_one({
+            "user_id": user_id,
             "telegram_id": telegram_id,
-            "memory_type": "important_event",
-            "content": content,
-            "importance": 0.9,
-            "confidence": 0.8,
-            "source_message_id": message_id,
+            "memory_type": "conversation_summary",
+            "content": new_summary,
+            "importance": 1.0,
+            "confidence": 1.0,
+            "source_message_id": None,
             "created_at": now,
-            "last_used_at": None,
-        }
+            "last_used_at": now,
+        })
+    except Exception as e:
+        logger.error("Summary update failed for telegram_id %s: %s", telegram_id, e)
 
-        memory_result = await db.memories.insert_one(memory_doc)
-        created_items["memory_id"] = str(memory_result.inserted_id)
-
-        # 3. Try to extract time like "2pm to 4pm"
-        start_hour = 14
-        end_hour = 16
-
-        time_match = re.search(
-            r"(\d{1,2})\s*(am|pm)?\s*(to|-)\s*(\d{1,2})\s*(am|pm)?",
-            lower_content,
-        )
-
-        if time_match:
-            start_hour = int(time_match.group(1))
-            start_ampm = time_match.group(2)
-            end_hour = int(time_match.group(4))
-            end_ampm = time_match.group(5)
-
-            if start_ampm == "pm" and start_hour != 12:
-                start_hour += 12
-            if end_ampm == "pm" and end_hour != 12:
-                end_hour += 12
-
-        # 4. Simple date rule: tomorrow
-        event_date = now.date()
-
-        if "tomorrow" in lower_content:
-            event_date = (now + timedelta(days=1)).date()
-
-        start_time = datetime(
-            event_date.year,
-            event_date.month,
-            event_date.day,
-            start_hour,
-            0,
-            tzinfo=timezone.utc,
-        )
-
-        end_time = datetime(
-            event_date.year,
-            event_date.month,
-            event_date.day,
-            end_hour,
-            0,
-            tzinfo=timezone.utc,
-        )
-
-        event_doc = {
-            "user_id": user["_id"],
-            "telegram_id": telegram_id,
-            "title": "Exam",
-            "description": content,
-            "event_type": "exam",
-            "start_time": start_time,
-            "end_time": end_time,
-            "follow_up_needed": True,
-            "follow_up_done": False,
-            "created_at": now,
-        }
-
-        event_result = await db.events.insert_one(event_doc)
-        event_id = str(event_result.inserted_id)
-        created_items["event_id"] = event_id
-
-        # 5. Create proactive task 5 minutes after the event ends
-        scheduled_time = end_time + timedelta(minutes=5)
-
-        task_doc = {
-            "user_id": user["_id"],
-            "telegram_id": telegram_id,
-            "event_id": event_id,
-            "task_type": "follow_up",
-            "message_to_send": "How did your exam go?",
-            "scheduled_time": scheduled_time,
-            "status": "pending",
-            "sent_at": None,
-            "created_at": now,
-        }
-
-        task_result = await db.proactive_tasks.insert_one(task_doc)
-        created_items["proactive_task_id"] = str(task_result.inserted_id)
-
-    return {
-        "success": True,
-        "input": content,
-        "created": created_items,
-    }
+    # Extract structured memories, events, proactive tasks from this turn
+    await extract_and_save(user_id, telegram_id, user_message, ai_response, summary)

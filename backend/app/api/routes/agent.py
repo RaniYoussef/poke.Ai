@@ -3,7 +3,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.services.agent_processor import process_user_message
+from backend.app.services.agent_processor import process_user_message
 
 router = APIRouter(prefix="/agent", tags=["agent"])
 

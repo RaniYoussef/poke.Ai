@@ -1,6 +1,11 @@
-from fastapi import FastAPI
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 
-from app.api.routes import (
+from fastapi import FastAPI
+from pymongo import ASCENDING, DESCENDING
+
+from backend.app.api.routes import (
     test,
     users,
     messages,
@@ -9,17 +14,36 @@ from app.api.routes import (
     proactive_tasks,
     agent,
 )
-from app.db.mongodb import ping_mongo
+from backend.app.config import settings
+from db.mongodb import db, ping_mongo
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    # ── startup ──────────────────────────────────────────────────────────────
+    await ping_mongo()
+    logger.info("Connected to MongoDB")
+    await _ensure_indexes()
+
+    if settings.RUN_PROACTIVE_WORKER_IN_API:
+        from backend.app.workers.proactive_worker import proactive_worker_loop
+        logger.info("Starting proactive worker inside FastAPI (dev mode)")
+        asyncio.create_task(proactive_worker_loop())
+
+    yield
+    # ── shutdown (nothing to clean up for now) ────────────────────────────────
 
 
 app = FastAPI(
     title="Poke.AI Backend",
     description="Backend API for the proactive Telegram AI friend",
-    version="0.1.0",
+    version="0.2.0",
+    lifespan=lifespan,
 )
 
-
-# Routes
+# ─── Routes ──────────────────────────────────────────────────────────────────
 app.include_router(test.router)
 app.include_router(users.router)
 app.include_router(messages.router)
@@ -29,12 +53,43 @@ app.include_router(proactive_tasks.router)
 app.include_router(agent.router)
 
 
-@app.on_event("startup")
-async def startup_event():
-    await ping_mongo()
-    print("Connected to MongoDB")
+async def _ensure_indexes():
+    """Create MongoDB indexes on startup if they don't exist yet."""
+    try:
+        # messages: fast lookup by user + time
+        await db.messages.create_index([("user_id", ASCENDING), ("created_at", ASCENDING)])
+
+        # memories: lookup by user, sorted by importance or tags
+        await db.memories.create_index([("user_id", ASCENDING), ("importance", DESCENDING)])
+        await db.memories.create_index([("user_id", ASCENDING), ("tags", ASCENDING)])
+        # fast lookup for rolling summary
+        await db.memories.create_index([
+            ("user_id", ASCENDING),
+            ("memory_type", ASCENDING),
+            ("created_at", DESCENDING),
+        ])
+
+        # events: open events per user
+        await db.events.create_index([
+            ("user_id", ASCENDING),
+            ("follow_up_done", ASCENDING),
+            ("start_time", ASCENDING),
+        ])
+
+        # proactive_tasks: worker query (status + scheduled_time is the hot path)
+        await db.proactive_tasks.create_index([("status", ASCENDING), ("scheduled_time", ASCENDING)])
+        await db.proactive_tasks.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
+
+        # memory_profiles: one profile per user
+        await db.memory_profiles.create_index([("user_id", ASCENDING)], unique=True)
+
+        logger.info("MongoDB indexes ensured")
+    except Exception as e:
+        # Non-fatal: indexes are optimizations, not requirements
+        logger.warning("Index creation warning: %s", e)
 
 
+# ─── Health ───────────────────────────────────────────────────────────────────
 @app.get("/")
 def root():
     return {"message": "Poke.AI backend is running"}
@@ -46,4 +101,5 @@ async def health_check():
     return {
         "status": "ok",
         "database": "mongodb connected",
+        "version": "0.2.0",
     }
