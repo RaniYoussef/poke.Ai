@@ -34,5 +34,5 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     )
 
     await update.message.reply_text(
-        f"Hey {user.first_name}! I'm Poke.AI — your proactive AI friend. I'm here whenever you need me!"
+        f"Hey {user.first_name}. I'm Poke.AI.\n\nText me anything. I'll keep track of what matters."
     )

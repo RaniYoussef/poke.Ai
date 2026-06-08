@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 from bson import ObjectId
 
+from backend.app.config import settings
 from db.mongodb import db
 
 logger = logging.getLogger(__name__)
@@ -72,7 +73,11 @@ async def build_user_context(
     open_events = []
     ev_cursor = (
         db.events
-        .find({"user_id": user_id, "follow_up_done": False})
+        .find({
+            "user_id": user_id,
+            "follow_up_done": {"$ne": True},
+            "followed_up": {"$ne": True},
+        })
         .sort("start_time", 1)
         .limit(5)
     )
@@ -108,7 +113,7 @@ async def build_user_context(
             "first_name": user.get("first_name", ""),
             "username": user.get("username", ""),
             "language": user.get("language", "en"),
-            "timezone": user.get("timezone", "UTC"),
+            "timezone": user.get("timezone", settings.DEFAULT_TIMEZONE),
             "preferred_tone": user.get("preferred_tone", "friendly"),
             "proactivity_level": user.get("proactivity_level", "medium"),
         },

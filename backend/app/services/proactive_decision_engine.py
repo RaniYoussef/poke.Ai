@@ -51,24 +51,23 @@ _EMOTIONAL_KEYWORDS = {
 _DECISION_PROMPT = """\
 You are Poke.AI's proactive decision brain.
 
-You decide if Poke.AI should send the user a message first.
+You decide whether Poke.AI should message the user first.
 
-Poke.AI is a close AI companion, not a generic assistant.
-It should reach out only when it feels caring, useful, and natural.
+Poke.AI should feel like a close human friend/partner, not an assistant.
 
 Rules:
 - Do not spam.
-- Do not send messages just to fill silence.
-- Message only if there is a human reason.
-- Prefer specific messages based on memory.
-- Keep messages short.
-- The final message should sound like a real human text.
-- No assistant phrases.
-- No "as an AI".
-- No "I am checking in according to your schedule".
-- No long motivational paragraphs.
-- No more than 1 emoji.
+- Do not message just because the system is running.
+- Only message if there is a real human reason.
+- Do not be creepy.
+- Do not mention database, memory, scheduling, or analysis.
+- Do not say "as an AI".
+- Do not sound like a notification.
+- Prefer specific, natural messages based on what the user cares about.
+- The final message must be short, human, caring, and natural for Telegram.
 - Maximum 40 words.
+- No more than 1 emoji.
+- Not romantic unless the user clearly uses that tone first.
 
 Candidate trigger:
 {candidate_json}
@@ -84,6 +83,7 @@ Return JSON only:
   "priority": 0.0,
   "suggested_message": "",
   "cooldown_key": "",
+  "event_id": null,
   "reschedule_after_minutes": null
 }}\
 """
@@ -251,7 +251,7 @@ async def has_recent_duplicate_task(
     user: dict,
     now: datetime | None = None,
 ) -> bool:
-    """Return True if a similar pending/sending/sent task exists recently."""
+    """Return True if a similar active task exists or was sent recently."""
     if not cooldown_key:
         return False
 
@@ -259,21 +259,32 @@ async def has_recent_duplicate_task(
     window_hours = _duplicate_window_hours(message_type, user)
     cutoff = now - timedelta(hours=window_hours)
 
-    existing = await db.proactive_tasks.find_one({
+    active_duplicate = await db.proactive_tasks.find_one({
         "user_id": user_id,
         "cooldown_key": cooldown_key,
-        "status": {"$in": ["pending", "sending", "sent"]},
-        "created_at": {"$gte": cutoff},
+        "status": {"$in": ["pending", "sending"]},
+    })
+    if active_duplicate:
+        return True
+
+    recent_sent = await db.proactive_tasks.find_one({
+        "user_id": user_id,
+        "cooldown_key": cooldown_key,
+        "status": "sent",
+        "$or": [
+            {"sent_at": {"$gte": cutoff}},
+            {"created_at": {"$gte": cutoff}},
+        ],
     })
 
-    return existing is not None
+    return recent_sent is not None
 
 
 def get_quiet_hours_state(user: dict, now: datetime | None = None) -> dict:
-    """Check optional user quiet hours and return a block/reschedule state."""
+    """Check user/default quiet hours and return a block/reschedule state."""
     now = now or datetime.now(timezone.utc)
-    quiet_hours = user.get("quiet_hours")
-    if not isinstance(quiet_hours, dict):
+    quiet_hours = _quiet_hours_for_user(user)
+    if not quiet_hours:
         return {"blocked": False, "reschedule_after_minutes": None, "resume_at": None}
 
     start = _parse_clock_time(quiet_hours.get("start"))
@@ -305,6 +316,26 @@ def get_quiet_hours_state(user: dict, now: datetime | None = None) -> dict:
     resume_at = resume_local.astimezone(timezone.utc)
     minutes = max(1, int((resume_at - now).total_seconds() // 60))
     return {"blocked": True, "reschedule_after_minutes": minutes, "resume_at": resume_at}
+
+
+def _quiet_hours_for_user(user: dict) -> dict | None:
+    quiet_hours = user.get("quiet_hours")
+    if isinstance(quiet_hours, dict):
+        if quiet_hours.get("enabled") is False:
+            return None
+        return {
+            "start": quiet_hours.get("start")
+            or quiet_hours.get("start_time")
+            or settings.DEFAULT_QUIET_HOURS_START,
+            "end": quiet_hours.get("end")
+            or quiet_hours.get("end_time")
+            or settings.DEFAULT_QUIET_HOURS_END,
+        }
+
+    return {
+        "start": user.get("quiet_hours_start") or settings.DEFAULT_QUIET_HOURS_START,
+        "end": user.get("quiet_hours_end") or settings.DEFAULT_QUIET_HOURS_END,
+    }
 
 
 async def get_proactive_cooldown_state(
@@ -388,7 +419,11 @@ async def _load_user_snapshot(user_id: ObjectId, user: dict, now: datetime) -> d
     open_events = []
     event_cursor = (
         db.events
-        .find({"user_id": user_id, "follow_up_done": {"$ne": True}})
+        .find({
+            "user_id": user_id,
+            "follow_up_done": {"$ne": True},
+            "followed_up": {"$ne": True},
+        })
         .sort("start_time", 1)
         .limit(10)
     )
@@ -431,7 +466,7 @@ async def _load_user_snapshot(user_id: ObjectId, user: dict, now: datetime) -> d
             "telegram_id": user.get("telegram_id"),
             "first_name": user.get("first_name") or "",
             "username": user.get("username") or "",
-            "timezone": user.get("timezone") or "UTC",
+            "timezone": user.get("timezone") or settings.DEFAULT_TIMEZONE,
             "proactivity_level": _normalize_proactivity_level(user.get("proactivity_level")),
             "proactive_enabled": user.get("proactive_enabled", True),
         },
@@ -512,6 +547,8 @@ def _detect_candidates(snapshot: dict, now: datetime) -> list[dict]:
 
 def _event_candidate(event: dict, now: datetime) -> dict | None:
     if event.get("follow_up_needed") is False:
+        return None
+    if event.get("follow_up_done") is True or event.get("followed_up") is True:
         return None
 
     followup_at = (
@@ -633,6 +670,7 @@ def _no(
         "priority": 0,
         "suggested_message": None,
         "cooldown_key": None,
+        "event_id": None,
         "reschedule_after_minutes": reschedule_after_minutes,
     }
 
@@ -776,7 +814,7 @@ def _as_utc(value: Any) -> datetime | None:
 
 
 def _to_user_timezone(value: datetime, user: dict) -> datetime:
-    tz_name = user.get("timezone") or "UTC"
+    tz_name = user.get("timezone") or settings.DEFAULT_TIMEZONE
     try:
         tz = ZoneInfo(tz_name)
     except Exception:
@@ -840,6 +878,7 @@ def _clean_event(event: dict) -> dict:
         "follow_up_at": _as_utc(event.get("follow_up_at")),
         "follow_up_needed": event.get("follow_up_needed", True),
         "follow_up_done": event.get("follow_up_done", False),
+        "followed_up": event.get("followed_up", False),
     }
 
 

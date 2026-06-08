@@ -74,6 +74,11 @@ async def run_proactive_decision_batch() -> dict:
 
             if not decision.get("should_message"):
                 skipped += 1
+                logger.info(
+                    "Skipped proactive task for telegram_id=%s: %s",
+                    user.get("telegram_id"),
+                    decision.get("reason", "no reason provided"),
+                )
                 continue
 
             task_result = await create_proactive_task_from_decision(
@@ -92,6 +97,11 @@ async def run_proactive_decision_batch() -> dict:
                 )
             else:
                 skipped += 1
+                logger.info(
+                    "Did not create proactive task for telegram_id=%s: %s",
+                    user.get("telegram_id"),
+                    task_result.get("reason", "duplicate or blocked"),
+                )
 
         except Exception as e:
             skipped += 1

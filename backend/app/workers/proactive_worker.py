@@ -17,6 +17,7 @@ import logging
 from datetime import datetime, timezone
 
 from bson import ObjectId
+from pymongo import ReturnDocument
 
 from db.mongodb import db
 from backend.app.services.context_builder import build_user_context, format_context_for_prompt
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 WORKER_INTERVAL_SECONDS = 30
 
 _PROACTIVE_PROMPT_TEMPLATE = """\
-You are poke.Ai texting {name} first — they didn't message you.
+You are Poke.AI texting {name} first. They did not message you.
 
 Why you're reaching out:
 {reason}
@@ -44,13 +45,15 @@ What you know about {name}:
 Write one short Telegram message.
 
 Rules:
-- Sound like a close friend who remembered something
+- Sound like a close human friend who remembered something
 - Maximum 40 words
-- No AI-like phrases, no assistant tone
+- No AI-like phrases, no assistant tone, no notification tone
 - Max 1 emoji
 - Do not mention scheduling or automation
+- Do not mention database, memory, or analysis
 - Do not over-explain
-- Make it feel personal and real\
+- Make it feel personal and real
+- Not romantic unless the user clearly uses that tone first\
 """
 
 
@@ -77,9 +80,9 @@ async def _process_one_task() -> None:
                 {"scheduled_at": {"$lte": now}},
             ],
         },
-        {"$set": {"status": "sending"}},
+        {"$set": {"status": "sending", "locked_at": now}},
         sort=[("priority", -1), ("scheduled_time", 1), ("scheduled_at", 1)],
-        return_document=True,  # return updated doc
+        return_document=ReturnDocument.AFTER,
     )
 
     if not task:
@@ -109,16 +112,16 @@ async def _process_one_task() -> None:
             await _reschedule_task(task_id, reschedule_at)
             return
 
-        # Cooldown check
-        cooldown_result = await get_proactive_cooldown_state(user_id, user)
-        if cooldown_result["blocked"]:
-            reschedule_at = cooldown_result["resume_at"]
-            logger.info(
-                "Task %s blocked by cooldown for user %s — rescheduling to %s",
-                task_id, telegram_id, reschedule_at,
-            )
-            await _reschedule_task(task_id, reschedule_at)
-            return
+        if not _bypasses_proactive_cooldown(task):
+            cooldown_result = await get_proactive_cooldown_state(user_id, user)
+            if cooldown_result["blocked"]:
+                reschedule_at = cooldown_result["resume_at"]
+                logger.info(
+                    "Task %s blocked by cooldown for user %s — rescheduling to %s",
+                    task_id, telegram_id, reschedule_at,
+                )
+                await _reschedule_task(task_id, reschedule_at)
+                return
 
         message_text = _validated_message_override(task)
         if not message_text:
@@ -190,12 +193,16 @@ def _validated_message_override(task: dict) -> str | None:
     if not message:
         return None
 
-    message = " ".join(message.split())
     if len(message.split()) > 45:
         logger.warning("Task %s message_override is too long; regenerating", task.get("_id"))
         return None
 
     return message[:500]
+
+
+def _bypasses_proactive_cooldown(task: dict) -> bool:
+    task_type = task.get("task_type") or task.get("type")
+    return bool(task.get("user_requested")) and task_type == "reminder"
 
 
 async def _reschedule_task(task_id: ObjectId, reschedule_at: datetime | None) -> None:
@@ -228,6 +235,7 @@ async def _mark_related_event_followed_up(task: dict, sent_at: datetime) -> None
         {
             "$set": {
                 "follow_up_done": True,
+                "followed_up": True,
                 "followed_up_at": sent_at,
             }
         },
@@ -235,7 +243,14 @@ async def _mark_related_event_followed_up(task: dict, sent_at: datetime) -> None
 
 
 async def _fail_task(task_id: ObjectId, error: str) -> None:
+    logger.error("Failed sending proactive task %s: %s", task_id, error)
     await db.proactive_tasks.update_one(
         {"_id": task_id},
-        {"$set": {"status": "failed", "error": error}},
+        {
+            "$set": {
+                "status": "failed",
+                "error": error,
+                "failed_at": datetime.now(timezone.utc),
+            }
+        },
     )

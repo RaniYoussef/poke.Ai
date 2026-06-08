@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     MONGO_DB_NAME: str = "poke_ai"
     GOOGLE_CLOUD_PROJECT: str = "project-722768a1-c5f8-4666-b5d"
     GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
     TELEGRAM_BOT_TOKEN: str = ""
     # Set to true to run the proactive worker inside FastAPI (dev mode).
     # In production, run the worker separately: python -m app.workers.run_worker
@@ -24,6 +25,9 @@ class Settings(BaseSettings):
     PROACTIVE_MEDIUM_COOLDOWN_HOURS: int = 24
     PROACTIVE_HIGH_COOLDOWN_HOURS: int = 6
     RUN_PROACTIVE_DECISION_WORKER_IN_API: bool = False
+    DEFAULT_TIMEZONE: str = "Africa/Cairo"
+    DEFAULT_QUIET_HOURS_START: str = "23:00"
+    DEFAULT_QUIET_HOURS_END: str = "09:00"
 
     class Config:
         env_file = (

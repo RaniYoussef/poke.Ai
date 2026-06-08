@@ -82,12 +82,18 @@ async def _ensure_indexes():
         ])
         await db.events.create_index([
             ("user_id", ASCENDING),
+            ("followed_up", ASCENDING),
+            ("followup_at", ASCENDING),
+        ])
+        await db.events.create_index([
+            ("user_id", ASCENDING),
             ("follow_up_done", ASCENDING),
             ("followup_at", ASCENDING),
         ])
 
         # proactive_tasks: worker query (status + scheduled_time is the hot path)
         await db.proactive_tasks.create_index([("status", ASCENDING), ("scheduled_time", ASCENDING)])
+        await db.proactive_tasks.create_index([("status", ASCENDING), ("scheduled_at", ASCENDING)])
         await db.proactive_tasks.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
         await db.proactive_tasks.create_index([
             ("user_id", ASCENDING),
