@@ -38,7 +38,11 @@ Return ONLY a valid JSON object — no explanation, no markdown, no fences.
     "dislikes": [],
     "goals": [],
     "communication_style": "",
-    "emotional_notes": ""
+    "emotional_notes": "",
+    "attachment_style": null,
+    "neurodivergence": [],
+    "social_battery": null,
+    "stress_coping": null
   }},
   "events": [
     {{
@@ -70,7 +74,13 @@ Rules:
 - If the user asks for a reminder in minutes, set scheduled_in_minutes to that exact number.
 - If the user directly asks Poke.AI to remind/message them, set type to "reminder", user_requested to true, and include a short message.
 - If nothing meaningful to extract, return empty arrays and "unknown" mood.
-- Return valid JSON only.\
+- Return valid JSON only.
+
+Profile field rules (only fill when clearly evidenced — leave null/empty otherwise):
+- attachment_style: "anxious" if they show strong need for reassurance, apologize for texting too much, fear being ignored, or ask if they're bothering you. "avoidant" if they mention needing space, pulling away under stress, or disliking frequent messages. "secure" if they're comfortable and balanced. "fearful_avoidant" if they show both extremes. null if unclear.
+- neurodivergence: ONLY if the user explicitly states a diagnosis or strongly self-identifies (e.g. "I have ADHD", "my OCD is bad today", "I'm autistic"). Never infer or guess. Use their exact term. Valid values: ADHD, OCD, autism, anxiety_disorder, depression, BPD, dyslexia, sensory_processing, PTSD, bipolar.
+- social_battery: "introvert" if they recharge alone and find people draining. "extrovert" if energized by socializing. "ambivert" if clearly both. null if unclear.
+- stress_coping: "isolates" if they go quiet or pull away when stressed. "reaches_out" if they talk to people when stressed. "overthinks" if they spiral or ruminate. "shuts_down" if they become non-functional. null if unclear.\
 """
 
 
@@ -136,13 +146,25 @@ async def _save_profile(user_id, telegram_id, updates: dict, now: datetime) -> N
 
     list_fields = {
         k: [i for i in updates.get(k, []) if i]
-        for k in ("likes", "dislikes", "goals")
+        for k in ("likes", "dislikes", "goals", "neurodivergence")
     }
     scalar_fields = {
         k: v
         for k in ("communication_style", "emotional_notes")
         if (v := (updates.get(k) or "").strip())
     }
+    # Personality scalars — only set when Gemini returned a non-null value
+    _ATTACHMENT_VALID = {"anxious", "avoidant", "secure", "fearful_avoidant"}
+    _SOCIAL_VALID = {"introvert", "extrovert", "ambivert"}
+    _STRESS_VALID = {"isolates", "reaches_out", "overthinks", "shuts_down"}
+    for field, valid_set in (
+        ("attachment_style", _ATTACHMENT_VALID),
+        ("social_battery", _SOCIAL_VALID),
+        ("stress_coping", _STRESS_VALID),
+    ):
+        raw = (updates.get(field) or "").strip().lower()
+        if raw in valid_set:
+            scalar_fields[field] = raw
 
     has_list = any(list_fields.values())
     has_scalar = bool(scalar_fields)

@@ -156,6 +156,29 @@ def format_context_for_prompt(context: dict) -> str:
             parts.append(f"[Emotional notes] {profile['emotional_notes']}")
         if profile.get("communication_style"):
             parts.append(f"[Communication style] {profile['communication_style']}")
+        _ATTACHMENT_HINTS = {
+            "anxious": "clingy — loves frequent check-ins, double texting is fine, needs reassurance",
+            "avoidant": "avoidant — needs space, dislikes double texts, back off if they go quiet",
+            "fearful_avoidant": "push-pull — craves closeness but fears it; be steady, don't chase",
+            "secure": "secure attachment — relaxed and comfortable",
+        }
+        attachment = profile.get("attachment_style")
+        if attachment and attachment in _ATTACHMENT_HINTS:
+            parts.append(f"[Attachment style] {_ATTACHMENT_HINTS[attachment]}")
+        nd = profile.get("neurodivergence") or []
+        if nd:
+            parts.append(f"[Neurodivergence] {', '.join(nd)}")
+        if profile.get("social_battery"):
+            parts.append(f"[Social battery] {profile['social_battery']}")
+        _STRESS_HINTS = {
+            "isolates": "goes quiet when stressed — don't flood them, one gentle message",
+            "reaches_out": "reaches out when stressed — be available and responsive",
+            "overthinks": "tends to spiral — help them zoom out, one step at a time",
+            "shuts_down": "shuts down under pressure — short, warm, low-demand messages work best",
+        }
+        stress = profile.get("stress_coping")
+        if stress and stress in _STRESS_HINTS:
+            parts.append(f"[Stress coping] {_STRESS_HINTS[stress]}")
 
     memories = context.get("important_memories", [])
     if memories:

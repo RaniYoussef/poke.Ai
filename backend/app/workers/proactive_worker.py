@@ -201,8 +201,7 @@ def _validated_message_override(task: dict) -> str | None:
 
 
 def _bypasses_proactive_cooldown(task: dict) -> bool:
-    task_type = task.get("task_type") or task.get("type")
-    return bool(task.get("user_requested")) and task_type == "reminder"
+    return bool(task.get("user_requested"))
 
 
 async def _reschedule_task(task_id: ObjectId, reschedule_at: datetime | None) -> None:

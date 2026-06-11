@@ -841,6 +841,10 @@ def _clean_profile(profile: dict) -> dict:
         "goals": profile.get("goals", []),
         "communication_style": profile.get("communication_style", ""),
         "emotional_notes": profile.get("emotional_notes", ""),
+        "attachment_style": profile.get("attachment_style"),
+        "neurodivergence": profile.get("neurodivergence", []),
+        "social_battery": profile.get("social_battery"),
+        "stress_coping": profile.get("stress_coping"),
     }
 
 

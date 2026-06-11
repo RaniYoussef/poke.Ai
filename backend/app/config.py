@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     GEMINI_MODEL: str = "gemini-2.5-flash"
     TELEGRAM_BOT_TOKEN: str = ""
+
+    GOOGLE_CLOUD_LOCATION: str = "us-central1"
     # Set to true to run the proactive worker inside FastAPI (dev mode).
     # In production, run the worker separately: python -m app.workers.run_worker
     RUN_PROACTIVE_WORKER_IN_API: bool = False

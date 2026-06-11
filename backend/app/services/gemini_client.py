@@ -58,7 +58,12 @@ def _get_client():
     if not settings.GEMINI_API_KEY:
         raise ValueError("GEMINI_API_KEY is not configured")
     if _client is None:
-        _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        # _client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        _client = genai.Client(
+            vertexai=True,
+            project=settings.GOOGLE_CLOUD_PROJECT,
+            location="us-central1",
+        )
     return _client
 
 
